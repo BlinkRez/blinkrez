@@ -19,13 +19,13 @@ BlinkRez Design
 Basics
 ------
 
-The DNS API performs lookups in an asynchronous, threadless manner. It provides
-some primitives for basic DNS query operations, and implements a mechanism to
-establish socket connections in rough compliance to `Happy Eyeballs (IPv6)`_
-and `Happy Eyeballs (SCTP)`_.  The API is intended to be extensible to adapt to
-new technologies.
+The BlinkRez C API performs lookups in an asynchronous, threadless manner. It
+provides some primitives for basic DNS query operations, and implements a
+mechanism to establish socket connections in rough compliance to `Happy
+Eyeballs (IPv6)`_ and `Happy Eyeballs (SCTP)`_.  The API is intended to be
+extensible to adapt to new technologies.
 
-The API consists of three major objects: policy context, low-level resolver,
+This API consists of three major objects: policy context, low-level resolver,
 and socket connector.  The policy context provides a common configuration
 point for lookup and connection policies, and provide the main point of
 extension for the API; the low-level resolver performs the basic lookup of
@@ -98,6 +98,34 @@ most uses.
   used as a fallback if UDP results in a truncated result.  The default
   is false (start with UDP, fallback to TCP).
 
+Operation
+~~~~~~~~~
+
+The blinkrez_ctx is used to create the other types via the following functions:
+
+* create_resolver() - Creates a resolver
+* create_connector() - Creates a connector
+
+create_resolver() creates a blinkrez_resolver based on this context's
+configuration.  If successful, this function returns true and the configured
+resolver.  Otherwise it returns false and error information.
+
+::
+
+    bool blinkrez_create_resolver(blinkrez_ctx ctx,
+                                  blinkrez_resolver *resolver,
+                                  blinkrez_err *err)
+
+create_connetor() creates a blinkrez_connector based on this context's
+configuration.  If successful, this function returns true and the configured
+connector.  Otherwise it returns false and error information.
+
+::
+
+    bool blinkrez_create_connetor(blinkrez_ctx ctx,
+                                  blinkrez_connector *conn,
+                                  blinkrez_err *err)
+
 Low-Level Resolver
 ------------------
 
@@ -112,48 +140,36 @@ Each of the following properties has a getter, but no setter.  The values are
 determined when the blinkrez_resolver is created, or as its state changes while
 processing lookups:
 
-* context (``blinkrez_ctx``) - The owning context
+* context (``blinkrez_ctx``) - The owning context.
 * running (``bool``) - Flag to indicate this resolver has at least one
   outstanding lookup in progress.
   
-Events
-~~~~~~
-
-The blinkrez_resolver implements the following events:
-
-* "dnsNameResolved" - Triggered when a A or AAAA result is received. The event
-  data includes the following information (at a minimum):
-  
-  - name (``const char *``) - The name resolved against.
-  - type (``int``) - The type of record (A or AAAA).
-  - address (``struct sockaddr_storage *``) - The resolved address; may be NULL
-    if the result is an empty record
-  - verified (``bool``) - Indicates the chain of records is signed and
-    verified, via DNSSEC (OPEN ISSUE: does this accept for the AD flag from a
-    recursive name server, or must every record be verified separately?)
-  
-* "dnsComplete" - Triggered when the blinkrez_resolver has completed its
-  current operation, successfully or otherwise.  If the operation completed
-  with a significant error (e.g. out of memory, no reachable name servers), the
-  event data is a pointer to a ``blinkrez_err`` structure describing the error;
-  otherwise the event data is NULL.
-
-Operation
-~~~~~~~~~
+Operations
+~~~~~~~~~~
 
 The blinkrez_resolver provides the following functions:
 
-* lookup(type, name) - Initiates the lookup.
-* cancel(handle) - Terminates an outstanding lookup (if any).
+* lookup() - Initiates a lookup based on type and name
+* cancel() - Cancels a pending lookup (if any).
 
-lookup() takes a record type and a name, and finds all of the associated
-addresses. The socket establishment builds on an instance of this type to
-actually create a socket, based on the policies for addressing and transport.
-For A/AAAA lookups, this resolves IPv4 and IPv6 addresses, depending on the
-configuration's allowed addressing (the {allow_ipv4} and {allow_ipv6} settings,
-respectively); for SRV lookups, this further resolves the target names, ordered
-according to the priority (and possibly weight).  CNAMEs are automatically
-followed when encountered.
+lookup() takes a record type and a name (along with a callback and optional
+callback data), and finds all of the associated records. The socket
+establishment builds on an instance of this type to actually create a socket,
+based on the policies for addressing and transport. For A/AAAA lookups, this
+resolves IPv4 and IPv6 addresses, depending on the configuration's allowed
+addressing (the {allow_ipv4} and {allow_ipv6} settings, respectively); for
+SRV lookups, this further resolves the target names, ordered according to the
+priority (and possibly weight); other types will simply return the record
+data.  CNAMEs are automatically followed when encountered.
+
+::
+
+    bool blinkrez_resolver_lookup(int type,
+                                  const char *name,
+                                  blinkrez_lookup_cb cb,
+                                  void *arg,
+                                  blinkrez_handle *handle,
+                                  blinkrez_errcode *err)
 
 The type is the integer RR type value, and can be either 29 (A + AAAA) or 33
 (SRV). Future versions of this API may support other RR types. Note that A
@@ -164,19 +180,71 @@ fully-qualified domain name (e.g. "example.com"); for SRV lookups, it is the
 combination of the service name, service protocol, and domain name (e.g.
 "_xmpp-client._tcp.example.com").
 
+The cb is the callback to execute when a record is found, or a non-recoverable
+error is encountered.  This callback is executed once for each individual
+record, and once more after all records have been reported.  For example,
+a lookup of A/AAAA for "example.com" will result in the callback executing
+three times, once for the A record result, once for the AAAA record result,
+and once to indicate the lookup is complete.
+
+The arg is the user-provided callback data, and is passed to the callback
+each time it is executed.
+
 The handle is returned by lookup() to identify a pending lookup operation,
 and used by cancel() to terminate that operation.  This value is an opaque
-key used by blinkrez_resolver, and has no semantic meaning outside of the API.
+key used by blinkrez_resolver, and has no semantic meaning outside of that
+instance.
 
 lookup() returns false and error information if the provided data is invalid,
 or memory has been exhausted.  Otherwise, it returns true and a handle.
-Further success or failure is indicated via the "dnsComplete" event.  If the
-lookup succeeds, the results are reported via individual "dnsNameResolved"
-events, one for each record.
+Further success or failure is indicated via the callback.
+
+cancel()
+!!!!!!!!
 
 cancel() takes handle returned by lookup(), and terminates the outstanding
 lookup (if any).  If handle is NULL, then all outstanding operations are
-terminated.  Each terminated operation will trigger a "dnsComplete" event.
+terminated.  Each terminated operation will execute the associated callback
+with a BLINKREZ_ERR_CANCELED error code.
+
+::
+
+    void blinkrez_resolver_cancel(blinkrez_handle handle)
+
+Callback
+~~~~~~~~
+
+The lookup() callback is expected to match the following signature::
+
+    void (*blinkrez_resolver_lookup_cb)(blinkrez_lookup_handle handle,
+                                        blinkrez_err_code retcode,
+                                        struct blinkrez_lookup_result *result,
+                                        void *arg);
+
+This callback is executed for each found record, and when the lookup() is
+complete (successful or failed).
+
+The handle indicates the lookup() request this callback is associated with.
+
+The retcode indicates the status of the lookup():
+    
+* ``BLINKREZ_ERR_NONE`` if the lookup completed successfully
+* ``BLINKREZ_ERR_CONTINUE`` if more results are expected
+* ``BLINKREZ_ERR_CANCELED`` if the lookup was canceled by the user
+* ``BLINKREZ_ERR_NOT_FOUND`` if name and type could not be resolved
+* ``BLINKREZ_ERR_NO_MEM`` if an out-of-memory condition was reached
+
+The blinkrez_lookup_result is a structure describing the resolved record:
+
+* name (``const char *``) - The name resolved against.
+* type (``int``) - The type of record resolved.
+* address (``struct sockaddr_storage *``) - The resolved address; may be NULL
+  if the result is an empty record
+* verified (``bool``) - Indicates the chain of records is signed and
+  verified, via DNSSEC (OPEN ISSUE: does this accept for the AD flag from a
+  recursive name server, or must every record be verified separately?)
+
+The value of result is undefined if retcode is **not** BLINKREZ_ERR_CONTINUE.
 
 Socket Connector
 ----------------
@@ -193,46 +261,34 @@ Each of the following properties have a getter, but no setter.  The values are
 determined when the blinkrez_connector is created, or as its state changes while
 processing lookups:
 
-* context (``blinkrez_ctx``) - The owning context
+* context (``blinkrez_ctx``) - The owning context.
 * running (``bool``) - Flag to indicate this connector has at least one
   outstanding operation in progress.
 
-Events
-~~~~~~
-
-The blinkrez_connector implements the following events:
-
-* "dnsConnectionComplete" - Triggered when a socket connection operation
-  completes, according to `Transport Agility`_ below. The event data includes
-  the following information (at a minimum):
-  
-  - error (``blinkrez_err``) - Upon success, this value's code is blinkrez_ERR_NONE, and
-    the remaining data is provided.  Otherwise it describes the error
-    encountered, and the remaining event data is undefined.
-  - transport (``const char *``) - The transport name used to establish the
-    connection
-  - socket (``evutil_socket_t``) - The socket handle/file descriptor
-  - address (``struct sockaddr_storage``) - The resolved address
-  - data (``struct evbuffer *``) - Received initial data, can be NULL and/or
-    an empty buffer.  If this value is not NULL, the listener SHOULD use
-    consume this data first, before processing the socket's recv buffer.
-  - verified (``bool``) - Indicates the chain of records is signed and
-    verified, via DNSSEC (OPEN ISSUE: does this accept for the AD flag from a
-    recursive name server, or must every record be verified separately?)
-
-Operation
-~~~~~~~~~
+Operations
+~~~~~~~~~~
 
 The blinkrez_connector provides the following functions:
 
-* connect(type, name, port, data) - Initiates a connection attempt.
-* cancel(handle) - Terminates an outstanding connect (if any).
+* connect() - Initiates a connection attempt.
+* cancel() - Terminates an outstanding connect (if any).
 
 connect() takes a record type (A/AAAA, SRV), a name, port, and (optional)
 initial data and establishes a socket connection.  The established socket is
 determined by the addressing and transport agility algorithms specified below.
 For SRV-based operations, only the transport specified by the service protocol
 portion of the name (e.g. "tcp" for "_xmpp-client._tcp.example.com") is used.
+
+::
+
+    bool blinkrez_connector_connect(int type,
+                                    const char *name,
+                                    uint16_t port,
+                                    struct evbuffer *initdata,
+                                    blinkrez_connector_cb cb,
+                                    void *arg,
+                                    blinkrez_handle handle,
+                                    blinkrez_errcode *err);
 
 The type is the integer RR type value, and can be either 29 (A + AAAA) or 33
 (SRV). Note that A and AAAA are **not** separately allowed here.
@@ -245,9 +301,10 @@ combination of the service name, server protocol, and domain name (e.g.
 The port is used directly for A/AAAA-based operations, or as a fallback for
 SRV-based operations.
 
-The (optional) data is used as part of establishing the socket connection.  If
-provided, the transport sends this data as part of finalizing the connection.
-This can result in important optimizations for some transports, such as SCTP.
+The (optional) initdata is used as part of establishing the socket connection.
+If provided, the transport sends this data as part of finalizing the
+connection. This can result in important optimizations for some transports,
+such as SCTP.
 
 The handle is returned by connect() to identify a pending connection operation,
 and used by cancel() to terminate that operation.  This value is an opaque
@@ -255,15 +312,53 @@ key used by blinkrez_connector, and has no semantic meaning outside of the API.
 
 connect() returns false and error information if the provided data is invalid,
 or memory has been exhausted.  Otherwise, it returns true and a handle.
-Further success or failure is indicated via the "dnsConnectionComplete" event.
+Further success or failure is indicated via the callback.
 
-cancel() takes the name originally passed to lookup(), and terminates the
-outstanding lookup (if any).  If name is NULL, then all outstanding operations
-are terminated.  Each terminated operation will trigger a
-"dnsConnectionComplete" event with blinkrez_ERR_CANCELED as the error code.
+cancel() takes the handle returned by connect(), and terminates the
+outstanding lookup (if any).  If handle is NULL, then all outstanding operations
+are terminated.  Each terminated operation will execute its associated callback
+with a BLINKREZ_ERR_CANCELED error code.
 
-Addresses vs Names
-~~~~~~~~~~~~~~~~~~
+Callback
+~~~~~~~~
+
+The connect() callback is expected to match the following signature::
+
+    void (*blinkrez_connector_lookup_cb)(blinkrez_lookup_handle handle,
+                                         blinkrez_err_code retcode,
+                                         struct blinkrez_connect_result *result,
+                                         void *arg);
+
+This callback is executed when connect() completes (successful or failed).
+
+The handle indicates the connect() request this callback is associated with.
+
+The retcode indicates the status of the connect():
+    
+* ``BLINKREZ_ERR_NONE`` if the connect completed successfully
+* ``BLINKREZ_ERR_CANCELED`` if the connect was canceled by the user
+* ``BLINKREZ_ERR_NOT_FOUND`` if name and type could not be resolved
+* ``BLINKREZ_ERR_SOCKET`` if a socket error was encountered, and could not be
+  recovered (e.g. failed to connect to any candidate)
+* ``BLINKREZ_ERR_NO_MEM`` if an out-of-memory condition was reached
+
+The result is a structure describing the connection:
+
+* transport (``const char *``) - The transport name used to establish the
+  connection
+* socket (``evutil_socket_t``) - The socket handle/file descriptor
+* address (``struct sockaddr_storage``) - The resolved address
+* initdata (``struct evbuffer *``) - Received initial data, can be NULL and/or
+  an empty buffer.  If this value is not NULL, the listener SHOULD consume
+  this data first, before processing the socket's recv buffer.
+* verified (``bool``) - Indicates the chain of records is signed and
+  verified, via DNSSEC (OPEN ISSUE: does this accept for the AD flag from a
+  recursive name server, or must every record be verified separately?)
+
+The value of result is undefined if retcode is **not** BLINKREZ_ERR_NONE.
+
+Addresses vs. Names
+~~~~~~~~~~~~~~~~~~~
 
 For simplicity, the blinkrez_connector will not reject IP addresses (e.g.
 "192.168.0.24" or "[fe80:0:0:0:200:f8ff:fe21:67cf]") when performing
@@ -364,14 +459,6 @@ The simplified approach is as follows:
      transport to complete.
    * The specific transport is noted for the connected address; the next
      connection attempt SHOULD use this transport.
-
-Error Information
------------------
-
-This API adds the following error codes:
-
-* BLINKREZ_ERR_CANCELED - The operation was canceled.
-* BLINKREZ_ERR_NOT_FOUND - The data (address information) could not be resolved.
 
 Extensibility
 -------------
