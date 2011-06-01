@@ -1,12 +1,12 @@
 ..
-    Portions created or assigned to Cisco Systems, Inc. are
-    Copyright (c) Cisco Systems, Inc.  All Rights Reserved.
+    Portions created or assigned to Joe Hildebrand <jhildebr@cisco.com>. are
+    Copyright (c) Joe Hildebrand <jhildebr@cisco.com>.  All Rights Reserved.
 ..
 
 .. meta::
    :description: BlinkRez Design
    :author: Matthew A. Miller <mamille2@cisco.com>
-   :copyright: Copyright (c) Cisco Systems, Inc.  All Rights Reserved.
+   :copyright: Joe Hildebrand <jhildebr@cisco.com>.  All Rights Reserved.
    :dateModified: 2011-06-01
 
 BlinkRez Design
