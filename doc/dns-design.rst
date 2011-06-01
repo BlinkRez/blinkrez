@@ -25,10 +25,10 @@ establish socket connections in rough compliance to `Happy Eyeballs (IPv6)`_
 and `Happy Eyeballs (SCTP)`_.  The API is intended to be extensible to adapt to
 new technologies.
 
-The API consists of three major objects: policy context, mid-level resolver,
+The API consists of three major objects: policy context, low-level resolver,
 and socket connector.  The policy context provides a common configuration
 point for lookup and connection policies, and provide the main point of
-extension for the API; the mid-level resolver performs the basic lookup of
+extension for the API; the low-level resolver performs the basic lookup of
 addresses for names, automatically following aliases and service targets; the
 socket connector attempts to establish a socket for a service and/or domain
 name.
@@ -98,10 +98,10 @@ most uses.
   used as a fallback if UDP results in a truncated result.  The default
   is false (start with UDP, fallback to TCP).
 
-Mid-Level Resolver
+Low-Level Resolver
 ------------------
 
-The mid-level resolver, blinkrez_resolver, performs DNS operations for a given
+The low-level resolver, blinkrez_resolver, performs DNS operations for a given
 domain or service name.  Multiple lookups can be pending for the same
 blinkrez_resolver instance.
 
@@ -181,7 +181,7 @@ terminated.  Each terminated operation will trigger a "dnsComplete" event.
 Socket Connector
 ----------------
 
-The socket connector, blinkrez_connector, builds upon the mid-level resolver and
+The socket connector, blinkrez_connector, builds upon the low-level resolver and
 policy context to establish a best-case socket connection from a name.  Like
 the resolver, the socket connector can have multiple operations running at
 a time.
