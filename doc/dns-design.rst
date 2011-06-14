@@ -36,15 +36,15 @@ name.
 Policy Context
 --------------
 
-The policy context, blinkrez_ctx, establishes the initial rules for lookups and
+The policy context, bz_ctx, establishes the initial rules for lookups and
 socket connections.  From it, the other two API types are created.
 
 Properties
 ~~~~~~~~~~
 
-The properties of a blinkrez_ctx each have their own getters; setters are not
+The properties of a bz_ctx each have their own getters; setters are not
 exposed. While the getter functions for these properties operate against
-the blinkrez_ctx, it may actually use the settings blinkrez_htable.
+the bz_ctx, it may actually use the settings bz_htable.
 
 * selector (``struct event_base *``) - This is the event_base that lookups and
   socket connectors are selected/polled against.  It can be set as part of
@@ -53,16 +53,16 @@ the blinkrez_ctx, it may actually use the settings blinkrez_htable.
 Configuration Settings
 ~~~~~~~~~~~~~~~~~~~~~~
 
-The blinkrez_ctx will have a number of settings, which it will accept during its
-creation as a blinkrez_htable. The most common settings will likely have
-convenience functions (operating over the blinkrez_htable).  The use of generic
+The bz_ctx will have a number of settings, which it will accept during its
+creation as a bz_htable. The most common settings will likely have
+convenience functions (operating over the bz_htable).  The use of generic
 maps/hashtables allows for maximum flexibility, at the expense of some
-simplicity.  However, the default settings for a blinkrez_ctx are appropriate for
+simplicity.  However, the default settings for a bz_ctx are appropriate for
 most uses.
 
 * selector (``struct event_base *``) - This is the selector/polling event base
   to work against; useful for processing resolution requests in line with other
-  network operations. By default, each blinkrez_ctx creates it's own if this
+  network operations. By default, each bz_ctx creates it's own if this
   setting is NULL.
 * allow_ipv4 (``bool``) - This is a flag to indicate if IPv4 resolves and
   connections should be attempted. Setting this to false effectively ignores
@@ -101,53 +101,53 @@ most uses.
 Operation
 ~~~~~~~~~
 
-The blinkrez_ctx is used to create the other types via the following functions:
+The bz_ctx is used to create the other types via the following functions:
 
 * create_resolver() - Creates a resolver
 * create_connector() - Creates a connector
 
-create_resolver() creates a blinkrez_resolver based on this context's
+create_resolver() creates a bz_resolver based on this context's
 configuration.  If successful, this function returns true and the configured
 resolver.  Otherwise it returns false and error information.
 
 ::
 
-    bool blinkrez_create_resolver(blinkrez_ctx ctx,
-                                  blinkrez_resolver *resolver,
-                                  blinkrez_err *err)
+    bool bz_create_resolver(bz_ctx ctx,
+                            bz_resolver *resolver,
+                            bz_errcode *err)
 
-create_connetor() creates a blinkrez_connector based on this context's
+create_connetor() creates a bz_connector based on this context's
 configuration.  If successful, this function returns true and the configured
 connector.  Otherwise it returns false and error information.
 
 ::
 
-    bool blinkrez_create_connetor(blinkrez_ctx ctx,
-                                  blinkrez_connector *conn,
-                                  blinkrez_err *err)
+    bool bz_create_connector(bz_ctx ctx,
+                             bz_connector *conn,
+                             bz_errcode *err)
 
 Low-Level Resolver
 ------------------
 
-The low-level resolver, blinkrez_resolver, performs DNS operations for a given
+The low-level resolver, bz_resolver, performs DNS operations for a given
 domain or service name.  Multiple lookups can be pending for the same
-blinkrez_resolver instance.
+bz_resolver instance.
 
 Properties
 ~~~~~~~~~~
 
 Each of the following properties has a getter, but no setter.  The values are
-determined when the blinkrez_resolver is created, or as its state changes while
+determined when the bz_resolver is created, or as its state changes while
 processing lookups:
 
-* context (``blinkrez_ctx``) - The owning context.
+* context (``bz_ctx``) - The owning context.
 * running (``bool``) - Flag to indicate this resolver has at least one
   outstanding lookup in progress.
   
 Operations
 ~~~~~~~~~~
 
-The blinkrez_resolver provides the following functions:
+The bz_resolver provides the following functions:
 
 * lookup() - Initiates a lookup based on type and name
 * cancel() - Cancels a pending lookup (if any).
@@ -164,18 +164,19 @@ data.  CNAMEs are automatically followed when encountered.
 
 ::
 
-    bool blinkrez_resolver_lookup(int type,
-                                  const char *name,
-                                  blinkrez_lookup_cb cb,
-                                  void *arg,
-                                  blinkrez_handle *handle,
-                                  blinkrez_errcode *err)
+    bool bz_resolver_lookup(int type,
+                            const char *name,
+                            bz_lookup_cb cb,
+                            void *arg,
+                            bz_handle *handle,
+                            bz_errcode *err)
 
-The type is the integer RR type value, and can be either 29 (A + AAAA) or 33
-(SRV). Future versions of this API may support other RR types. Note that A
-and AAAA are **not** separately allowed here.
+The type is the integer RR type value.  Any valid RR type may be specified.
+Note that A (decimal 1) and AAAA (decimal 28) are **not** separately allowed
+here; if either is specified, this function will actually perform two queries
+(one for the A record, another for the AAAA).
 
-The name is the string to resolve.  For A/AAAA lookups, it is the
+The name is the string to resolve.  For most lookup types, it is the
 fully-qualified domain name (e.g. "example.com"); for SRV lookups, it is the
 combination of the service name, service protocol, and domain name (e.g.
 "_xmpp-client._tcp.example.com").
@@ -192,34 +193,31 @@ each time it is executed.
 
 The handle is returned by lookup() to identify a pending lookup operation,
 and used by cancel() to terminate that operation.  This value is an opaque
-key used by blinkrez_resolver, and has no semantic meaning outside of that
+key used by bz_resolver, and has no semantic meaning outside of that
 instance.
 
 lookup() returns false and error information if the provided data is invalid,
 or memory has been exhausted.  Otherwise, it returns true and a handle.
 Further success or failure is indicated via the callback.
 
-cancel()
-!!!!!!!!
-
 cancel() takes handle returned by lookup(), and terminates the outstanding
 lookup (if any).  If handle is NULL, then all outstanding operations are
 terminated.  Each terminated operation will execute the associated callback
-with a BLINKREZ_ERR_CANCELED error code.
+with a BZ_ERR_CANCELED error code.
 
 ::
 
-    void blinkrez_resolver_cancel(blinkrez_handle handle)
+    void bz_resolver_cancel(bz_handle handle)
 
 Callback
 ~~~~~~~~
 
 The lookup() callback is expected to match the following signature::
 
-    void (*blinkrez_resolver_lookup_cb)(blinkrez_lookup_handle handle,
-                                        blinkrez_err_code retcode,
-                                        struct blinkrez_lookup_result *result,
-                                        void *arg);
+    void (*bz_resolver_lookup_cb)(bz_lookup_handle handle,
+                                  bz_err_code retcode,
+                                  struct bz_lookup_result *result,
+                                  void *arg);
 
 This callback is executed for each found record, and when the lookup() is
 complete (successful or failed).
@@ -228,28 +226,99 @@ The handle indicates the lookup() request this callback is associated with.
 
 The retcode indicates the status of the lookup():
     
-* ``BLINKREZ_ERR_NONE`` if the lookup completed successfully
-* ``BLINKREZ_ERR_CONTINUE`` if more results are expected
-* ``BLINKREZ_ERR_CANCELED`` if the lookup was canceled by the user
-* ``BLINKREZ_ERR_NOT_FOUND`` if name and type could not be resolved
-* ``BLINKREZ_ERR_NO_MEM`` if an out-of-memory condition was reached
+* ``BZ_ERR_NONE`` if the lookup completed successfully
+* ``BZ_ERR_CONTINUE`` if more results are expected
+* ``BZ_ERR_CANCELED`` if the lookup was canceled by the user
+* ``BZ_ERR_NOT_FOUND`` if name and type could not be resolved
+* ``BZ_ERR_NO_MEM`` if an out-of-memory condition was reached
 
-The blinkrez_lookup_result is a structure describing the resolved record:
+The bz_lookup_result is a structure describing the resolved record:
 
-* name (``const char *``) - The name resolved against.
+* name (``const char *``) - The name resolved against. **NOTE:** This is the
+  name requested when lookup() is called, which may represent a CNAME.
 * type (``int``) - The type of record resolved.
-* address (``struct sockaddr_storage *``) - The resolved address; may be NULL
-  if the result is an empty record
+* ttl (``int``) - The time-to-live for this record.
+* data (``void *``) - The record data.
+* datalen (``size_t``) - The size of the record data.
 * verified (``bool``) - Indicates the chain of records is signed and
   verified, via DNSSEC (OPEN ISSUE: does this accept for the AD flag from a
   recursive name server, or must every record be verified separately?)
 
-The value of result is undefined if retcode is **not** BLINKREZ_ERR_CONTINUE.
+The value of result is undefined if retcode is **not** BZ_ERR_CONTINUE.
 
+Processing Record Data
+~~~~~~~~~~~~~~~~~~~~~~
+
+The record data is passed the user raw; the user needs to perform additional
+processing.  To facilitate this, a number of parsing functions are provided by
+the API for directly supported types:
+
+* parse_address() - Returns the address for a A/AAAA record, according to
+  family (IPv4/IPv6)
+* parse_srv_target() - Returns the target for a SRV record
+* parse_srv_port() - Returns the port for a SRV record
+* parse_srv_priority() - Returns the priority for a SRV record
+* parse_srv_weight() - Returns the weight for a SRV record
+
+In general, each of parsing function takes the blinkres_lookup_result as its
+first argument, and returns the results as an output argument on the function.
+The return value is a ``bool`` that indicates success/failure, with a
+``bz_errcode *`` as the last argument to detail the cause of failure:
+
+* ``BZ_ERR_INVALID_ARG`` if the result's record type is not valid for
+  the parsing function invoked (e.g. calling parse_srv_target() with a AAAA
+  lookup result)
+* ``BZ_ERR_NO_MEM`` if an out-of-memory condition was reached
+
+parse_address() returns the address from the lookup result.  The family is
+set according to the result type (AF_INET for A, AF_INET6 for AAAA).  The
+user owns the memory for the sockaddr_storage and MUST release it via free().
+
+::
+
+    bool bz_lookup_result_parse_address(bz_lookup_result *rst,
+                                        struct sockaddr_storage **addr,
+                                        bz_errcode *err);
+
+parse_srv_target() returns the SRV target domain from the lookup result.  The
+resulting string is NULL-terminated, with the length provided as an optional
+convenience.  The user owns the memory for name and MUST release it via free().
+
+::
+
+    bool bz_lookup_result_parse_srv_target(bz_lookup_result *rst,
+                                           char **name,
+                                           size_t *namelen,
+                                           bz_errcode *err);
+                                                      
+parse_srv_port() returns the SRV target port from the lookup result.
+
+::
+
+    bool bz_lookup_result_parse_srv_port(bz_lookup_result *rst.
+                                         uint16_t *port,
+                                         bz_errcode *err);
+
+parse_srv_priority() returns the SRV priority from the lookup result.
+
+::
+
+    bool bz_lookup_result_result_parse_srv_priority(bz_lookup_result *rst,
+                                                    uint16_t *priority,
+                                                    bz_errcode *err);
+                                                        
+parse_srv_weight() returns the SRV weight from the lookup result.
+
+::
+
+    bool bz_lookup_result_result_parse_srv_weight(bz_lookup_result *rst,
+                                                  uint16_t *weight,
+                                                  bz_errcode *err);
+                                                        
 Socket Connector
 ----------------
 
-The socket connector, blinkrez_connector, builds upon the low-level resolver and
+The socket connector, bz_connector, builds upon the low-level resolver and
 policy context to establish a best-case socket connection from a name.  Like
 the resolver, the socket connector can have multiple operations running at
 a time.
@@ -258,17 +327,17 @@ Properties
 ~~~~~~~~~~
 
 Each of the following properties have a getter, but no setter.  The values are
-determined when the blinkrez_connector is created, or as its state changes while
+determined when the bz_connector is created, or as its state changes while
 processing lookups:
 
-* context (``blinkrez_ctx``) - The owning context.
+* context (``bz_ctx``) - The owning context.
 * running (``bool``) - Flag to indicate this connector has at least one
   outstanding operation in progress.
 
 Operations
 ~~~~~~~~~~
 
-The blinkrez_connector provides the following functions:
+The bz_connector provides the following functions:
 
 * connect() - Initiates a connection attempt.
 * cancel() - Terminates an outstanding connect (if any).
@@ -281,17 +350,18 @@ portion of the name (e.g. "tcp" for "_xmpp-client._tcp.example.com") is used.
 
 ::
 
-    bool blinkrez_connector_connect(int type,
-                                    const char *name,
-                                    uint16_t port,
-                                    struct evbuffer *initdata,
-                                    blinkrez_connector_cb cb,
-                                    void *arg,
-                                    blinkrez_handle handle,
-                                    blinkrez_errcode *err);
+    bool bz_connector_connect(int type,
+                              const char *name,
+                              uint16_t port,
+                              struct evbuffer *initdata,
+                              bz_connector_cb cb,
+                              void *arg,
+                              bz_handle handle,
+                              bz_errcode *err);
 
-The type is the integer RR type value, and can be either 29 (A + AAAA) or 33
-(SRV). Note that A and AAAA are **not** separately allowed here.
+The type is the integer RR type value, and can be either 1 (A) or 33 (SRV).
+Note that specifying A may result in either an IPv4- or IPv6-based connection;
+the use of the A type is intended to simplify API usage.
 
 The name is the string to resolve.  For A/AAAA lookups, it is the
 fully-qualified domain name (e.g. "example.com"); for SRV lookups, it is the
@@ -308,7 +378,7 @@ such as SCTP.
 
 The handle is returned by connect() to identify a pending connection operation,
 and used by cancel() to terminate that operation.  This value is an opaque
-key used by blinkrez_connector, and has no semantic meaning outside of the API.
+key used by bz_connector, and has no semantic meaning outside of the API.
 
 connect() returns false and error information if the provided data is invalid,
 or memory has been exhausted.  Otherwise, it returns true and a handle.
@@ -317,17 +387,17 @@ Further success or failure is indicated via the callback.
 cancel() takes the handle returned by connect(), and terminates the
 outstanding lookup (if any).  If handle is NULL, then all outstanding operations
 are terminated.  Each terminated operation will execute its associated callback
-with a BLINKREZ_ERR_CANCELED error code.
+with a BZ_ERR_CANCELED error code.
 
 Callback
 ~~~~~~~~
 
 The connect() callback is expected to match the following signature::
 
-    void (*blinkrez_connector_lookup_cb)(blinkrez_lookup_handle handle,
-                                         blinkrez_err_code retcode,
-                                         struct blinkrez_connect_result *result,
-                                         void *arg);
+    void (*bz_connector_lookup_cb)(bz_lookup_handle handle,
+                                   bz_err_code retcode,
+                                   struct bz_connect_result *result,
+                                   void *arg);
 
 This callback is executed when connect() completes (successful or failed).
 
@@ -335,19 +405,19 @@ The handle indicates the connect() request this callback is associated with.
 
 The retcode indicates the status of the connect():
     
-* ``BLINKREZ_ERR_NONE`` if the connect completed successfully
-* ``BLINKREZ_ERR_CANCELED`` if the connect was canceled by the user
-* ``BLINKREZ_ERR_NOT_FOUND`` if name and type could not be resolved
-* ``BLINKREZ_ERR_SOCKET`` if a socket error was encountered, and could not be
+* ``BZ_ERR_NONE`` if the connect completed successfully
+* ``BZ_ERR_CANCELED`` if the connect was canceled by the user
+* ``BZ_ERR_NOT_FOUND`` if name and type could not be resolved
+* ``BZ_ERR_SOCKET`` if a socket error was encountered, and could not be
   recovered (e.g. failed to connect to any candidate)
-* ``BLINKREZ_ERR_NO_MEM`` if an out-of-memory condition was reached
+* ``BZ_ERR_NO_MEM`` if an out-of-memory condition was reached
 
 The result is a structure describing the connection:
 
 * transport (``const char *``) - The transport name used to establish the
   connection
 * socket (``evutil_socket_t``) - The socket handle/file descriptor
-* address (``struct sockaddr_storage``) - The resolved address
+* address (``struct sockaddr_storage *``) - The resolved address
 * initdata (``struct evbuffer *``) - Received initial data, can be NULL and/or
   an empty buffer.  If this value is not NULL, the listener SHOULD consume
   this data first, before processing the socket's recv buffer.
@@ -355,14 +425,14 @@ The result is a structure describing the connection:
   verified, via DNSSEC (OPEN ISSUE: does this accept for the AD flag from a
   recursive name server, or must every record be verified separately?)
 
-The value of result is undefined if retcode is **not** BLINKREZ_ERR_NONE.
+The value of result is undefined if retcode is **not** BZ_ERR_NONE.
 
 Addresses vs. Names
 ~~~~~~~~~~~~~~~~~~~
 
-For simplicity, the blinkrez_connector will not reject IP addresses (e.g.
+For simplicity, the bz_connector will not reject IP addresses (e.g.
 "192.168.0.24" or "[fe80:0:0:0:200:f8ff:fe21:67cf]") when performing
-A/AAAA-based operations.  Instead, the blinkrez_connector will bypass the normal
+A/AAAA-based operations.  Instead, the bz_connector will bypass the normal
 lookup operations and attempt to establish a socket based on the transports
 appropriate to the address.
 
@@ -377,9 +447,9 @@ input/output is complete will not be provided by this API.
 There may be some concerns around resource locking, as the libevent dispatching
 will most likely take place on one thread while the calls to lookup and connect
 happen on others.  We may rely on libevent's locking mechanisms here, and
-require the user to properly configure them.  The blinkrez_dns functions will
+require the user to properly configure them.  The bz_dns functions will
 call libevent's lock/unlock functions as appropriate, and against the specific
-structure the blinkrez_dns is using (the current event/bufferevent is
+structure the bz_dns is using (the current event/bufferevent is
 recommended).
 
 Addressing Agility
