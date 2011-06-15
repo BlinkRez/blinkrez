@@ -152,6 +152,9 @@ The bz_resolver provides the following functions:
 * lookup() - Initiates a lookup based on type and name
 * cancel() - Cancels a pending lookup (if any).
 
+lookup()
+!!!!!!!!
+
 lookup() takes a record type and a name (along with a callback and optional
 callback data), and finds all of the associated records. The socket
 establishment builds on an instance of this type to actually create a socket,
@@ -164,12 +167,15 @@ data.  CNAMEs are automatically followed when encountered.
 
 ::
 
-    bool bz_resolver_lookup(int type,
+    bool bz_resolver_lookup(bz_resolver resolv,
+                            int type,
                             const char *name,
                             bz_lookup_cb cb,
                             void *arg,
                             bz_handle *handle,
                             bz_errcode *err)
+
+The resolv is the bz_resolver obtained from bz_create_resolver().
 
 The type is the integer RR type value.  Any valid RR type may be specified.
 Note that A (decimal 1) and AAAA (decimal 28) are **not** separately allowed
@@ -200,6 +206,9 @@ lookup() returns false and error information if the provided data is invalid,
 or memory has been exhausted.  Otherwise, it returns true and a handle.
 Further success or failure is indicated via the callback.
 
+cancel()
+!!!!!!!!
+
 cancel() takes handle returned by lookup(), and terminates the outstanding
 lookup (if any).  If handle is NULL, then all outstanding operations are
 terminated.  Each terminated operation will execute the associated callback
@@ -207,14 +216,16 @@ with a BZ_ERR_CANCELED error code.
 
 ::
 
-    void bz_resolver_cancel(bz_handle handle)
+    void bz_resolver_cancel(bz_resolver resolv,
+                            bz_handle handle)
 
 Callback
 ~~~~~~~~
 
 The lookup() callback is expected to match the following signature::
 
-    void (*bz_resolver_lookup_cb)(bz_lookup_handle handle,
+    void (*bz_resolver_lookup_cb)(bz_resolver resolv,
+                                  bz_handle handle,
                                   bz_err_code retcode,
                                   struct bz_lookup_result *result,
                                   void *arg);
@@ -270,6 +281,9 @@ The return value is a ``bool`` that indicates success/failure, with a
   lookup result)
 * ``BZ_ERR_NO_MEM`` if an out-of-memory condition was reached
 
+parse_address()
+!!!!!!!!!!!!!!!
+
 parse_address() returns the address from the lookup result.  The family is
 set according to the result type (AF_INET for A, AF_INET6 for AAAA).  The
 user owns the memory for the sockaddr_storage and MUST release it via free().
@@ -279,6 +293,9 @@ user owns the memory for the sockaddr_storage and MUST release it via free().
     bool bz_lookup_result_parse_address(bz_lookup_result *rst,
                                         struct sockaddr_storage **addr,
                                         bz_errcode *err);
+
+parse_srv_target()
+!!!!!!!!!!!!!!!!!!
 
 parse_srv_target() returns the SRV target domain from the lookup result.  The
 resulting string is NULL-terminated, with the length provided as an optional
@@ -290,6 +307,9 @@ convenience.  The user owns the memory for name and MUST release it via free().
                                            char **name,
                                            size_t *namelen,
                                            bz_errcode *err);
+
+parse_srv_port()
+!!!!!!!!!!!!!!!!
                                                       
 parse_srv_port() returns the SRV target port from the lookup result.
 
@@ -299,6 +319,9 @@ parse_srv_port() returns the SRV target port from the lookup result.
                                          uint16_t *port,
                                          bz_errcode *err);
 
+parse_srv_priority()
+!!!!!!!!!!!!!!!!!!!!
+
 parse_srv_priority() returns the SRV priority from the lookup result.
 
 ::
@@ -306,6 +329,9 @@ parse_srv_priority() returns the SRV priority from the lookup result.
     bool bz_lookup_result_result_parse_srv_priority(bz_lookup_result *rst,
                                                     uint16_t *priority,
                                                     bz_errcode *err);
+
+parse_srv_weight()
+!!!!!!!!!!!!!!!!!!
                                                         
 parse_srv_weight() returns the SRV weight from the lookup result.
 
@@ -342,6 +368,9 @@ The bz_connector provides the following functions:
 * connect() - Initiates a connection attempt.
 * cancel() - Terminates an outstanding connect (if any).
 
+connect()
+!!!!!!!!!
+
 connect() takes a record type (A/AAAA, SRV), a name, port, and (optional)
 initial data and establishes a socket connection.  The established socket is
 determined by the addressing and transport agility algorithms specified below.
@@ -350,7 +379,8 @@ portion of the name (e.g. "tcp" for "_xmpp-client._tcp.example.com") is used.
 
 ::
 
-    bool bz_connector_connect(int type,
+    bool bz_connector_connect(bz_connector conn,
+                              int type,
                               const char *name,
                               uint16_t port,
                               struct evbuffer *initdata,
@@ -358,6 +388,8 @@ portion of the name (e.g. "tcp" for "_xmpp-client._tcp.example.com") is used.
                               void *arg,
                               bz_handle handle,
                               bz_errcode *err);
+
+The conn is the bz_connector obtained via bz_create_connector().
 
 The type is the integer RR type value, and can be either 1 (A) or 33 (SRV).
 Note that specifying A may result in either an IPv4- or IPv6-based connection;
@@ -384,6 +416,9 @@ connect() returns false and error information if the provided data is invalid,
 or memory has been exhausted.  Otherwise, it returns true and a handle.
 Further success or failure is indicated via the callback.
 
+cancel()
+!!!!!!!!
+
 cancel() takes the handle returned by connect(), and terminates the
 outstanding lookup (if any).  If handle is NULL, then all outstanding operations
 are terminated.  Each terminated operation will execute its associated callback
@@ -394,12 +429,15 @@ Callback
 
 The connect() callback is expected to match the following signature::
 
-    void (*bz_connector_lookup_cb)(bz_lookup_handle handle,
-                                   bz_err_code retcode,
-                                   struct bz_connect_result *result,
+    void (*bz_connector_lookup_cb)(bz_connector conn,
+                                   bz_handle handle,
+                                   bz_errcode retcode,
+                                   bz_connect_result *result,
                                    void *arg);
 
 This callback is executed when connect() completes (successful or failed).
+
+The conn is the bz_connector used to establish the connection.
 
 The handle indicates the connect() request this callback is associated with.
 
