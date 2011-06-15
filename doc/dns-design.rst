@@ -97,6 +97,12 @@ most uses.
   UDP if the results are regularly expected to be truncated.  TCP is always
   used as a fallback if UDP results in a truncated result.  The default
   is false (start with UDP, fallback to TCP).
+* cache_mode (``bz_cache_mode``) - Determines how records are cached in
+  BlinkRez.  The possible values are:
+  
+  - BZ_CACHE_MODE_NONE - Disables caching altogether
+  - BZ_CACHE_MODE_TTL - Caches each record according to its time-to-live
+    value (default)
 
 Operation
 ~~~~~~~~~
@@ -248,14 +254,18 @@ The bz_lookup_result is a structure describing the resolved record:
 * name (``const char *``) - The name resolved against. **NOTE:** This is the
   name requested when lookup() is called, which may represent a CNAME.
 * type (``int``) - The type of record resolved.
-* ttl (``int``) - The time-to-live for this record.
+* expires (``time_t``) - The time when this result expires, in seconds since
+  Epoch.
 * data (``void *``) - The record data.
 * datalen (``size_t``) - The size of the record data.
 * verified (``bool``) - Indicates the chain of records is signed and
   verified, via DNSSEC (OPEN ISSUE: does this accept for the AD flag from a
   recursive name server, or must every record be verified separately?)
 
-The value of result is undefined if retcode is **not** BZ_ERR_CONTINUE.
+The value of result is undefined if retcode is **not** BZ_ERR_CONTINUE.  The
+result is owned by the bz_resolver, and is only guaranteed to be valid during
+the callback's execution.  The user MUST copy any information from the result
+that is needed after the callback returns.
 
 Processing Record Data
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -340,7 +350,44 @@ parse_srv_weight() returns the SRV weight from the lookup result.
     bool bz_lookup_result_result_parse_srv_weight(bz_lookup_result *rst,
                                                   uint16_t *weight,
                                                   bz_errcode *err);
-                                                        
+
+Caching
+~~~~~~~
+
+Lookup results are cached internally based on the cache mode of the owning
+bz_ctx and the expiration time of the idividual records.  If the bz_ctx's
+"cache_mode" is BZ_CACHE_MODE_NONE, results are never cached and each
+lookup() will query the upstream nameserver.  Otherwise, the storage of each
+result is keyed by the type and name of the request.  Each type/name key may
+have zero or more results associated with it.
+
+Each stage of a lookup() will first examine the cache to see if there are
+any results for the requested type/name key-pair.  For each result, if the
+result's expiration does not exceed the current time, the user's callback is
+executed with this result.  Otherwise, the result is discarded.
+
+If there are no valid results for the type/name key-pair, the upstream
+nameserver(s) are queried.  The answers are then processed into a result as
+follows:
+
+#) The result's type and name are set according to the RR's TYPE and NAME
+   values
+#) The result's expiration is set to the current time plus the RR's TTL
+   value
+#) The result's data and datalen are set to the RR's RDATA and RDLENGTH
+   values
+#) If the result's expiration is greater than the current time, it is
+   appended to any current results for the **requested** type and name.
+#) The result is then reported to the user via the lookup_cb.
+
+The value of "current time" is the number of seconds since the Epoch, and is
+based on either:
+
+* For cached results, it is obtained immediately prior to examining any results
+  in the cache for the requested type/name.
+* For nameserver responses, it is obtained immediately prior to processing any
+  of the answer RRs.
+  
 Socket Connector
 ----------------
 
