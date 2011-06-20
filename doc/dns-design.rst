@@ -94,8 +94,8 @@ most uses.
   (defaulting to port 53 is **NOT** assumed in this case)
 * resolve_via_tcp (``bool``) - This indicates whether to prefer TCP over UDP
   when performing DNS queries.  This setting allows the user to always bypass
-  UDP if the results are regularly expected to be truncated.  TCP is always
-  used as a fallback if UDP results in a truncated result.  The default
+  UDP if the answers are regularly expected to be truncated.  TCP is always
+  used as a fallback if UDP results in a truncated answer.  The default
   is false (start with UDP, fallback to TCP).
 * cache_mode (``bz_cache_mode``) - Determines how records are cached in
   BlinkRez.  The possible values are:
@@ -197,8 +197,8 @@ The cb is the callback to execute when a record is found, or a non-recoverable
 error is encountered.  This callback is executed once for each individual
 record, and once more after all records have been reported.  For example,
 a lookup of A/AAAA for "example.com" will result in the callback executing
-three times, once for the A record result, once for the AAAA record result,
-and once to indicate the lookup is complete.
+three times; once for the A record, once for the AAAA record, and once to
+indicate the lookup is complete.
 
 The arg is the user-provided callback data, and is passed to the callback
 each time it is executed.
@@ -228,12 +228,22 @@ with a BZ_ERR_CANCELED error code.
 Callback
 ~~~~~~~~
 
-The lookup() callback is expected to match the following signature::
+As mentioned in the lookup() section above, the callback is executed under the
+following conditions:
+
+* The lookup() is successful, and has more data; errcode is ``BZ_ERR_CONTINUE``
+  and record details the record-specific information.
+* The lookup() completed successfully and all records have been reported;
+  errcode is ``BZ_ERR_NONE`` and record is undefined.
+* A non-recoverable error is encountered; errcode is **not** ``BZ_ERR_NONE``
+  or ``BZ_ERR_CONTINUE`` and record is undefined.
+
+The callback is expected to match the following signature::
 
     void (*bz_resolver_lookup_cb)(bz_resolver resolv,
                                   bz_handle handle,
                                   bz_err_code retcode,
-                                  struct bz_lookup_result *result,
+                                  struct bz_lookup_record *record,
                                   void *arg);
 
 This callback is executed for each found record, and when the lookup() is
@@ -243,29 +253,38 @@ The handle indicates the lookup() request this callback is associated with.
 
 The retcode indicates the status of the lookup():
     
-* ``BZ_ERR_NONE`` if the lookup completed successfully
-* ``BZ_ERR_CONTINUE`` if more results are expected
+* ``BZ_ERR_NONE`` if the lookup completed successfully and all records have
+  been reported (this is the complete success case)
+* ``BZ_ERR_CONTINUE`` if more records are expected (this is the interim success
+  case)
 * ``BZ_ERR_CANCELED`` if the lookup was canceled by the user
-* ``BZ_ERR_NOT_FOUND`` if name and type could not be resolved
+* ``BZ_ERR_NO_SERVERS`` if name and type could not be found because a
+  nameserver could not be reached
+* ``BZ_ERR_NOT_FOUND`` if the name and type could not be found by the
+  nameserver(s) 
+* ``BZ_ERR_BOGUS`` if the record could not be validated because one or more
+  keys are invalid
 * ``BZ_ERR_NO_MEM`` if an out-of-memory condition was reached
 
-The bz_lookup_result is a structure describing the resolved record:
+The bz_lookup_record is a structure describing the resolved record:
 
 * name (``const char *``) - The name resolved against. **NOTE:** This is the
   name requested when lookup() is called, which may represent a CNAME.
 * type (``int``) - The type of record resolved.
-* expires (``time_t``) - The time when this result expires, in seconds since
+* expires (``time_t``) - The time when this record expires, in seconds since
   Epoch.
+* verified (``bool``) - Indicates the chain of records is signed and
+  verified by the API.
 * data (``void *``) - The record data.
 * datalen (``size_t``) - The size of the record data.
-* verified (``bool``) - Indicates the chain of records is signed and
-  verified, via DNSSEC (OPEN ISSUE: does this accept for the AD flag from a
-  recursive name server, or must every record be verified separately?)
 
-The value of result is undefined if retcode is **not** BZ_ERR_CONTINUE.  The
-result is owned by the bz_resolver, and is only guaranteed to be valid during
-the callback's execution.  The user MUST copy any information from the result
-that is needed after the callback returns.
+The value of record is undefined if retcode is **not** BZ_ERR_CONTINUE or
+BZ_ERR_NONE.  The record is owned by the bz_resolver, and is only guaranteed to
+be valid during the callback's execution.  The user MUST copy any information
+from the record that is needed after the callback returns.
+
+If the record is exists but contains no data, data will be NULL and datalen 0.
+Any calls to the record data processing functions below will return NULL values.
 
 Processing Record Data
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -281,39 +300,46 @@ the API for directly supported types:
 * parse_srv_priority() - Returns the priority for a SRV record
 * parse_srv_weight() - Returns the weight for a SRV record
 
-In general, each of parsing function takes the blinkres_lookup_result as its
-first argument, and returns the results as an output argument on the function.
-The return value is a ``bool`` that indicates success/failure, with a
+In general, each of parsing function takes the bz_lookup_record as its first
+argument, and returns the results as an output argument on the function. The
+return value is a ``bool`` that indicates success/failure, with a
 ``bz_errcode *`` as the last argument to detail the cause of failure:
 
-* ``BZ_ERR_INVALID_ARG`` if the result's record type is not valid for
-  the parsing function invoked (e.g. calling parse_srv_target() with a AAAA
-  lookup result)
+* ``BZ_ERR_INVALID_ARG`` if the record's type is not valid for the parsing
+  function invoked (e.g. calling parse_srv_target() with a AAAA lookup record)
 * ``BZ_ERR_NO_MEM`` if an out-of-memory condition was reached
 
 parse_address()
 !!!!!!!!!!!!!!!
 
-parse_address() returns the address from the lookup result.  The family is
-set according to the result type (AF_INET for A, AF_INET6 for AAAA).  The
-user owns the memory for the sockaddr_storage and MUST release it via free().
+parse_address() returns the address from the lookup record.  The family is
+set according to the record type (AF_INET for A, AF_INET6 for AAAA).  The
+user owns the memory for the sockaddr_storage and MUST release it via
+bz_data_free().
+
+If record is valid but does not contain any data, this function will set addr
+to NULL and return true.
 
 ::
 
-    bool bz_lookup_result_parse_address(bz_lookup_result *rst,
+    bool bz_lookup_record_parse_address(bz_lookup_record *record,
                                         struct sockaddr_storage **addr,
                                         bz_errcode *err);
 
 parse_srv_target()
 !!!!!!!!!!!!!!!!!!
 
-parse_srv_target() returns the SRV target domain from the lookup result.  The
+parse_srv_target() returns the SRV target domain from the lookup record.  The
 resulting string is NULL-terminated, with the length provided as an optional
-convenience.  The user owns the memory for name and MUST release it via free().
+convenience.  The user owns the memory for name and MUST release it via
+bz_data_free().
+
+If record is valid but does not contain any data, this function will set name
+to NULL, namelen to 0, and return true.
 
 ::
 
-    bool bz_lookup_result_parse_srv_target(bz_lookup_result *rst,
+    bool bz_lookup_record_parse_srv_target(bz_lookup_record *record,
                                            char **name,
                                            size_t *namelen,
                                            bz_errcode *err);
@@ -321,72 +347,81 @@ convenience.  The user owns the memory for name and MUST release it via free().
 parse_srv_port()
 !!!!!!!!!!!!!!!!
                                                       
-parse_srv_port() returns the SRV target port from the lookup result.
+parse_srv_port() returns the SRV target port from the lookup record.
+
+If record is valid but does not contain any data, this function will set port
+to 0 and return true.
 
 ::
 
-    bool bz_lookup_result_parse_srv_port(bz_lookup_result *rst.
+    bool bz_lookup_record_parse_srv_port(bz_lookup_record *record.
                                          uint16_t *port,
                                          bz_errcode *err);
 
 parse_srv_priority()
 !!!!!!!!!!!!!!!!!!!!
 
-parse_srv_priority() returns the SRV priority from the lookup result.
+parse_srv_priority() returns the SRV priority from the lookup record.
+
+If record is valid but does not contain any data, this function will set
+priority to 0 and return true.
 
 ::
 
-    bool bz_lookup_result_result_parse_srv_priority(bz_lookup_result *rst,
-                                                    uint16_t *priority,
-                                                    bz_errcode *err);
+    bool bz_lookup_record_parse_srv_priority(bz_lookup_record *rst,
+                                             uint16_t *priority,
+                                             bz_errcode *err);
 
 parse_srv_weight()
 !!!!!!!!!!!!!!!!!!
                                                         
-parse_srv_weight() returns the SRV weight from the lookup result.
+parse_srv_weight() returns the SRV weight from the lookup record.
+
+If record is valid but does not contain any data, this function will set
+weight to 0 and return true.
 
 ::
 
-    bool bz_lookup_result_result_parse_srv_weight(bz_lookup_result *rst,
-                                                  uint16_t *weight,
-                                                  bz_errcode *err);
+    bool bz_lookup_record_parse_srv_weight(bz_lookup_record *rst,
+                                           uint16_t *weight,
+                                           bz_errcode *err);
 
 Caching
 ~~~~~~~
 
-Lookup results are cached internally based on the cache mode of the owning
+Lookup records are cached internally based on the cache mode of the owning
 bz_ctx and the expiration time of the idividual records.  If the bz_ctx's
-"cache_mode" is BZ_CACHE_MODE_NONE, results are never cached and each
-lookup() will query the upstream nameserver.  Otherwise, the storage of each
-result is keyed by the type and name of the request.  Each type/name key may
-have zero or more results associated with it.
+"cache_mode" is BZ_CACHE_MODE_NONE, records are never cached and each
+lookup() will always query the upstream nameserver.  Otherwise, the storage of
+each record is keyed by the type and name of the request.  Each type/name key
+may have zero or more records associated with it.
 
 Each stage of a lookup() will first examine the cache to see if there are
-any results for the requested type/name key-pair.  For each result, if the
-result's expiration does not exceed the current time, the user's callback is
-executed with this result.  Otherwise, the result is discarded.
+any records for the requested type/name key-pair.  For each record, if the
+expiration does not exceed the current time, the user's callback is executed
+with this record.  Otherwise, the record is discarded.
 
 If there are no valid results for the type/name key-pair, the upstream
 nameserver(s) are queried.  The answers are then processed into a result as
 follows:
 
-#) The result's type and name are set according to the RR's TYPE and NAME
+#) The record's type and name are set according to the RR's TYPE and NAME
    values
-#) The result's expiration is set to the current time plus the RR's TTL
+#) The record's expiration is set to the current time plus the RR's TTL
    value
-#) The result's data and datalen are set to the RR's RDATA and RDLENGTH
-   values
-#) If the result's expiration is greater than the current time, it is
-   appended to any current results for the **requested** type and name.
-#) The result is then reported to the user via the lookup_cb.
+#) The record's data and datalen are set to the RR's RDATA and RDLENGTH
+   values (or NULL and 0, respectively, if the answer is NODATA).
+#) If the record's expiration is greater than the current time, it is
+   appended to any current records for the **requested** type and name.
+#) The record is then reported to the user via the lookup_cb.
 
 The value of "current time" is the number of seconds since the Epoch, and is
 based on either:
 
-* For cached results, it is obtained immediately prior to examining any results
-  in the cache for the requested type/name.
-* For nameserver responses, it is obtained immediately prior to processing any
-  of the answer RRs.
+* For cached records, the current time is obtained immediately prior to
+  examining any records in the cache for the requested type/name.
+* For nameserver responses, the current time is obtained immediately prior to
+  processing any of the answer records.
   
 Socket Connector
 ----------------
@@ -507,10 +542,9 @@ The result is a structure describing the connection:
   an empty buffer.  If this value is not NULL, the listener SHOULD consume
   this data first, before processing the socket's recv buffer.
 * verified (``bool``) - Indicates the chain of records is signed and
-  verified, via DNSSEC (OPEN ISSUE: does this accept for the AD flag from a
-  recursive name server, or must every record be verified separately?)
+  verified by the API.
 
-The value of result is undefined if retcode is **not** BZ_ERR_NONE.
+The value of record is undefined if retcode is **not** BZ_ERR_NONE.
 
 Addresses vs. Names
 ~~~~~~~~~~~~~~~~~~~
@@ -558,7 +592,7 @@ The simplified approach is as follows:
    * If P<0, delay reporting the AAAA lookup by abs(P * 10) milliseconds
    * If P>0, delay reporting A lookup by abs(P * 10) milliseconds
 
-2) For each reported result, attempt connection immediately; this step is
+2) For each reported record, attempt connection immediately; this step is
    skipped for DNS lookups without connection attempts.
 
 3) Adjust P for future lookups (only if both A and AAAA records are reported)
@@ -614,6 +648,24 @@ The simplified approach is as follows:
      transport to complete.
    * The specific transport is noted for the connected address; the next
      connection attempt SHOULD use this transport.
+
+Memory Mangement
+----------------
+
+There are a number of places where BlinkRez allocates memory that the user is
+expected to own and release, or where the user allocates the memory and the API
+is expected to own and release.  To assist with this, the API provides the
+following functions:
+
+* ``void *bz_data_malloc(size_t len)`` - To allocate a section of memory within
+  the context of the API
+* ``void *bz_data_realloc(void *orig, size_t len)`` - To resize a section of
+  memory allocated within the context of the API
+* ``free(void *ptr)`` - TO release memory allocated by the API
+
+These functions behave as their platform equivalents, but perform their
+operations within the API.  This is important to maintain the context of where
+memory was allocated (e.g. Windows DLLs).
 
 Extensibility
 -------------
